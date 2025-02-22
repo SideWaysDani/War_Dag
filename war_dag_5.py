@@ -401,7 +401,7 @@ default_args = {
 }
 
 
-@dag(dag_id='war_dag_test', schedule_interval=None, tags=['war_dag_test'], render_template_as_native_obj=True, default_args=default_args)
+@dag(dag_id='war_dag_5', schedule_interval=None, tags=['war_dag_5'], render_template_as_native_obj=True, default_args=default_args)
 def war_dag_test():
     '''New functions added below'''
     ''''-----------------------------'''
