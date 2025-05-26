@@ -14,6 +14,7 @@ from configparser import ConfigParser
 from pandas.tseries.offsets import Day, BDay
 import configparser
 import psycopg2
+from psycopg2 import extensions
 from polygon import RESTClient
 import pandas as pd
 import numpy as np
@@ -21,8 +22,12 @@ import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter, find_peaks, argrelextrema
 import requests
 import json
+import time
+from requests.exceptions import RequestException
 
 schema_name_global = "war_iter_5"
+one_to_one_flag = True
+liquitaded_flag = False
 
 # config = configparser.ConfigParser()
 # config.read('trade_configuration.ini')
@@ -207,7 +212,7 @@ class StockAnalyzerUsingAzureAPI:
     api_code = "TryM8ecL_3NA8n8CtLwgowLvm08BAHpC3Xp4_QwxtqTKAzFugvz0LQ=="
 
     @staticmethod
-    def load_data_from_api(st_name, start_date="2019-06-01", end_date="2025-01-10"):
+    def load_data_from_api(st_name, start_date="2019-06-01", end_date="2025-12-31"):
         url = "https://stapi02.azurewebsites.net/api/httpstsignals"
         params = {
             "code": StockAnalyzerUsingAzureAPI.api_code,
@@ -437,15 +442,15 @@ def war_dag_test():
             table_name='allocation_history',
             columns=['allocated_strength',	'opening_price',
                      'lead_id', 'closing_price',	'stock_quantity',	'p_and_l',
-                     'valid_from_start_date',	'valid_to_end_date',	'unit_assignment_id', 'allocation_id', 'status', 'battle_date','deployment_id'
+                     'valid_from_start_date',	'valid_to_end_date',	'unit_assignment_id', 'allocation_id', 'status', 'battle_date','deployment_id','account_id'
                      ],
             values_list=values_list
         )
         print(f"Allocation history inserted successfully.")
 
     def get_lead_name_id_from_allocation(db_helper: GenericDBHelper, depl_id):
-        result = db_helper.select_all(columns='leads.stock_name,leads.id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-                            JOIN  stocktrader.leads ON deployment.lead_id = leads.id''', where_clause='allocation.deployment_id = %s', where_values=(depl_id,))
+        result = db_helper.select_all(columns='leads_gold_ml.stock_name,leads_gold_ml.id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+                            JOIN  stocktrader.leads_gold_ml ON deployment.lead_id = leads_gold_ml.id''', where_clause='allocation.deployment_id = %s', where_values=(depl_id,))
 
         leads_name = result[0][0]
         leads_id = result[0][1]
@@ -472,7 +477,8 @@ def war_dag_test():
                     'closing_price',
                     'allocated_strength',
                     'stock_quantity',
-                    'status'],
+                    'status',
+                    'account_id'],
                 values_list=values_list
             )
             print("Allocation record inserted successfully.")
@@ -493,6 +499,7 @@ def war_dag_test():
             unit_assignment_id = account[0][1]
             start_date_depl = account[0][5]
             end_date_depl = account[0][6]
+            account_id = account[0][7]
 
             allocated_strength = values_list[0][4]
             opening_price = values_list[0][2]
@@ -507,7 +514,7 @@ def war_dag_test():
 
             print("Inserting allocation history table")
             value_list = [[allocated_strength, opening_price, lead_id, closing_price,
-                           stock_quantity, p_l, valid_from_start_date, valid_to_end_date, unit_assignment_id, allocation_id, status, battle_date_for_allocation_history,deployment_id]]
+                           stock_quantity, p_l, valid_from_start_date, valid_to_end_date, unit_assignment_id, allocation_id, status, battle_date_for_allocation_history,deployment_id,account_id]]
             print(f'Values received for allocation history{value_list}')
             insert_into_allocation_history(conn, value_list)
 
@@ -547,11 +554,11 @@ def war_dag_test():
         unit_assignment_id, lead_id, strength, status, valid_from_date, valid_to_date, account_id = values_list[
             0]
         lead_name = db_helper.select_all(
-            table_name='leads', schema_name='stocktrader', columns='stock_name', where_clause='id = %s', where_values=(lead_id,))
+            table_name='leads_gold_ml', schema_name='stocktrader', columns='stock_name', where_clause='id = %s', where_values=(lead_id,))
         deployment_id = fetch_deployment_data(
             conn=conn, unit_assignment_id=unit_assignment_id)[0][0]
         values_list = [(lead_id, status,
-                        valid_from_date, valid_to_date, unit_assignment_id, strength, deployment_id)]
+                        valid_from_date, valid_to_date, unit_assignment_id, strength, deployment_id,account_id)]
 
         print(f"deployment {values_list[0]}added successfully.")
         insert_into_deployment_history(conn, values_list)
@@ -585,9 +592,10 @@ def war_dag_test():
         valid_to_date = result[0][6]
         unit_assignment_id = result[0][1]
         strength = result[0][3]
+        account_id = result[0][7]
 
         values_list = [[lead_id, status, valid_from_date,
-                        valid_to_date, unit_assignment_id, strength, deployment_id]]
+                        valid_to_date, unit_assignment_id, strength, deployment_id,account_id]]
         print(
             f'Inserting deployment history with deplyoment status update{values_list}')
         insert_into_deployment_history(conn, values_list)
@@ -608,6 +616,8 @@ def war_dag_test():
         valid_to_date = result[0][6]
         unit_assignment_id = result[0][1]
         strength = result[0][3]
+        account_id = result[0][7]
+
 
         try:
             db_helper.update(
@@ -623,7 +633,7 @@ def war_dag_test():
             raise
 
         values_list = [[lead_id, status, valid_from_date,
-                        valid_to_date, unit_assignment_id, strength, deployment_id]]
+                        valid_to_date, unit_assignment_id, strength, deployment_id,account_id]]
         print(
             f'Inserting deployment history with deplyoment status update{values_list}')
         insert_into_deployment_history(conn, values_list)
@@ -667,9 +677,10 @@ def war_dag_test():
         account = db_helper.select_all(
             table_name='deployment', where_clause=sql)
         unit_assignment_id = account[0][1]
+        account_id = account[0][7]
 
         values_list = [[allocated_strength, opening_price, lead_id, closing_price,
-                        stock_quantity, p_l, valid_from_start_date, valid_to_end_date, unit_assignment_id, allocation_id, status, current_battle_date,deployment_id]]
+                        stock_quantity, p_l, valid_from_start_date, valid_to_end_date, unit_assignment_id, allocation_id, status, current_battle_date,deployment_id,account_id]]
         print(
             f'Inserting into allocation history update')
         insert_into_allocation_history(conn, values_list)
@@ -687,7 +698,8 @@ def war_dag_test():
                 'valid_to_date',
                 'unit_assignment_id',
                 'strength',
-                'deployment_id'],
+                'deployment_id',
+                'account_id'],
             values_list=values_list
         )
         print(f"deployment history inserted successfully.")
@@ -733,13 +745,15 @@ def war_dag_test():
                 'total_strength',
                 'remaining_strength',
                 'account_id',
-                'battle_date'
+                'battle_date',
+                'transaction_type',
+                'reserved_strength'
             ],
             values_list=values_list
         )
         print(f"account history inserted successfully.")
 
-    def update_account_table(conn, account_id, columns_to_be_updated: list, new_values: list, battle_date: datetime):
+    def update_account_table(conn, account_id, columns_to_be_updated: list, new_values: list, battle_date: datetime, transaction_type):
         db_helper = GenericDBHelper(conn)
 
         try:
@@ -757,11 +771,11 @@ def war_dag_test():
 
         account_table_info = db_helper.select_all(
             table_name='account', columns='*', where_clause=f'account_id = {account_id}')
-        account_id,	active_strength, user_id,	total_strength, remaining_strength = account_table_info[
+        account_id,	active_strength, user_id,	total_strength, remaining_strength , reserved_strength= account_table_info[
             0]
 
         history_values_list = [[user_id, active_strength,
-                                total_strength, remaining_strength, account_id, battle_date]]
+                                total_strength, remaining_strength, account_id, battle_date,transaction_type, reserved_strength]]
 
         insert_into_account_history(conn=conn, values_list=history_values_list)
 
@@ -778,7 +792,7 @@ def war_dag_test():
         """
         for poor_performer in allocations_to_be_removed:
             # code for getting start date and end date from deployment table
-            allocation_id, profit_and_loss, deployment_id, opening_price, closing_price, allocated_strength, stock_quantity, allocation_status = poor_performer
+            allocation_id, profit_and_loss, deployment_id, opening_price, closing_price, allocated_strength, stock_quantity, allocation_status, account_id = poor_performer
             print("hello 3")
 
             deployment_result = db_helper.select_all(
@@ -803,7 +817,7 @@ def war_dag_test():
                 print("hello 6")
                 allocation_history_status = allocation_history_status
                 allocation_history_values_list = [[allocated_strength, opening_price, lead_id, closing_price,
-                                                   stock_quantity, profit_and_loss, start_date, end_date, unit_assignment_id, allocation_id, allocation_history_status, battle_date,deployment_id]]
+                                                   stock_quantity, profit_and_loss, start_date, end_date, unit_assignment_id, allocation_id, allocation_history_status, battle_date,deployment_id,account_id]]
                 print("allocation history being inserted in process allocation")
                 print(allocation_history_values_list)
                 insert_into_allocation_history(
@@ -815,7 +829,7 @@ def war_dag_test():
                 print("hello 7")
 
                 deployment_history_vlaues = [
-                    [lead_id, depl_status, start_date, end_date, unit_assignment_id, strength, deployment_id]]
+                    [lead_id, depl_status, start_date, end_date, unit_assignment_id, strength, deployment_id,account_id]]
 
                 insert_into_deployment_history(
                     conn=conn, values_list=deployment_history_vlaues)
@@ -823,7 +837,7 @@ def war_dag_test():
                 remove_poor_deployments(
                     db_helper=db_helper, deployment_ids=[deployment_id])
 
-                account_id, active_strength, user_id, total_strength, remaining_strength = db_helper.select_all(
+                account_id, active_strength, user_id, total_strength, remaining_strength,reserved_strength = db_helper.select_all(
                     table_name='account', columns='*', where_clause=f'account_id = {account_id}')[0]
 
                 print("active_strength before----", active_strength)
@@ -845,8 +859,9 @@ def war_dag_test():
 
                 account_update_values_list = [
                     active_strength, total_strength, remaining_strength]
+                transaction_type = "Sell"
                 update_account_table(conn=conn, account_id=account_id, columns_to_be_updated=[
-                    'active_strength', 'total_strength', 'remaining_strength'], new_values=account_update_values_list, battle_date=battle_date)
+                    'active_strength', 'total_strength', 'remaining_strength'], new_values=account_update_values_list, battle_date=battle_date,transaction_type = transaction_type)
                 # unasssgining the unit
                 update_assignment_status(
                     conn=conn, assignment_status='unassigned', unit_ass_id=unit_assignment_id)
@@ -969,8 +984,8 @@ def war_dag_test():
         #     conn.close()
 
     # def get_lead_name_mapping_id_from_allocation(db_helper: GenericDBHelper):
-    #     result = db_helper.select_all(columns='allocation.*,leads.stock_name,leads.leads_id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-    #                           JOIN  {schema_name_global}.leads ON deployment.lead_id = leads.leads_id''')
+    #     result = db_helper.select_all(columns='allocation.*,leads_gold_ml.stock_name,leads_gold_ml.leads_id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+    #                           JOIN  {schema_name_global}.leads ON deployment.lead_id = leads_gold_ml.leads_id''')
     #     if result:
     #         # print("result", result)
     #         # leads_names = [item[-2] for item in result]
@@ -1010,8 +1025,8 @@ def war_dag_test():
             return
 
     def get_lead_name_mapping_id_from_allocation(conn):
-        query = f'''select allocation.*,leads.stock_name,leads.id from {schema_name_global}.allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-                            JOIN  stocktrader.leads ON deployment.lead_id = leads.id'''
+        query = f'''select allocation.*,leads_gold_ml.stock_name,leads_gold_ml.id from {schema_name_global}.allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+                            JOIN  stocktrader.leads_gold_ml ON deployment.lead_id = leads_gold_ml.id'''
         cur = conn.cursor()
         # Execute a simple SQL query
         # query = "SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
@@ -1061,6 +1076,7 @@ def war_dag_test():
 
             print('unique_tuples---0', unique_leads_tuples)
 
+
             return filtered_leads
         # if no allocation os available to compare and filter then filter simply return the
         else:
@@ -1074,8 +1090,8 @@ def war_dag_test():
         # Execute a simple SQL query
         # query = "SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
 
-        # query = "SELECT * FROM stocktrader.stocks_leads WHERE %s BETWEEN stocks_leads.start_date AND stocks_leads.end_date"
-        query = "SELECT id,stock_name FROM stocktrader.leads WHERE leads.lead_date BETWEEN %s AND %s and leads.endorsement = 'Yes'"
+        # query = "SELECT * FROM stocktrader.stocks_leads WHERE %s BETWEEN stocks_leads_gold_ml.start_date AND stocks_leads_gold_ml.end_date"
+        query = "SELECT id,stock_name FROM stocktrader.leads_gold_ml WHERE leads_gold_ml.lead_date BETWEEN %s AND %s"
 
         # query = "SELECT * FROM stocktrader.stocks_leads"
         cur.execute(query, (start_date, end_date,))
@@ -1093,10 +1109,15 @@ def war_dag_test():
 
         print("filtered_result---", filtered_result)
 
-        if not filtered_result:
-        # Returning the unnfiltered results
-            return result
+        if one_to_one_flag :
+            print("Returning filtered result as one_to_one_flag is True")
+            return filtered_result
 
+        #Doing this so that a lead can be assigned to more than one unit
+        if not filtered_result:
+            # Returning the unnfiltered results
+            print("Returning unfiltered result as one_to_one_flag is False and there are not results left after filtering")
+            return result
         return filtered_result
 
     def get_units(conn, fetch: str):
@@ -1136,6 +1157,25 @@ def war_dag_test():
             raise
 
         return total_remaining_strength
+    
+    def safe_get_aggs(client, ticker, from_date, to_date, retries=3, delay=2) -> dict:
+        for attempt in range(retries):
+            try:
+                return client.get_aggs(
+                    ticker=ticker,
+                    multiplier=1,
+                    timespan='day',
+                    from_=from_date,
+                    to=to_date
+                )
+            except Exception as e:
+                print(f"[Attempt {attempt + 1}] Failed to fetch {ticker} from Polygon: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay * (2 ** attempt))
+                else:
+                    print(f"Max retries exceeded for {ticker}")
+                    return None  # skip this one gracefully
+                
 
     def get_polygon_data(battle_date, leads, unassigned_units, origin: str):
         print("battle date----", battle_date)
@@ -1177,11 +1217,9 @@ def war_dag_test():
                 print('stock_name----------', stock_name)
                 print('stock_id----------', stock_id)
                 client = RESTClient("x2WHlSdeMaaSJLsYgck_sVSdMFSAaNpu")
-                dataRequest = client.get_aggs(ticker=stock_name,
-                                              multiplier=1,
-                                              timespan='day',
-                                              from_=from_date,
-                                              to=to_date)
+                dataRequest = safe_get_aggs(client, stock_name, from_date, to_date)
+                if not dataRequest:
+                    continue  # skip and keep going
                 priceData = pd.DataFrame(dataRequest)
                 if not priceData.empty:
                     priceData["lead id"] = stock_id
@@ -1240,11 +1278,9 @@ def war_dag_test():
                 # api_key is used
                 print('stock_name----------', stock_name)
                 client = RESTClient("x2WHlSdeMaaSJLsYgck_sVSdMFSAaNpu")
-                dataRequest = client.get_aggs(ticker=stock_name,
-                                              multiplier=1,
-                                              timespan='day',
-                                              from_=from_date,
-                                              to=to_date)
+                dataRequest = safe_get_aggs(client, stock_name, from_date, to_date)
+                if not dataRequest:
+                    continue  # skip and keep going
                 priceData = pd.DataFrame(dataRequest)
                 if not priceData.empty:
                     priceData['Stock name'] = stock_name
@@ -1291,36 +1327,113 @@ def war_dag_test():
     #     db_helper = GenericDBHelper(conn)
 
     #     # Execute the query with the list of tuples
-    #     db_helper.insert(table_name='leads', columns=columns,
+    #     db_helper.insert(table_name='leads_gold_ml', columns=columns,
     #                      values_list=list_leads_data)
 
     #     print("values inserted in leads table")
 
-    def analysing_units_to_assign_leads(conn, unassigned_units, battle_date):
-        # Simulate assigning unassigned units to leads and filling deployment table
+    # def analysing_units_to_assign_leads(conn, unassigned_units, battle_date):
+    #     # Simulate assigning unassigned units to leads and filling deployment table
+
+    #     db_helper = GenericDBHelper(conn)
+
+    #     if not unassigned_units:
+    #         print("No unassigned units found. Skipping assignment.")
+    #         return
+
+    #     # fetching account strength from account table
+
+    #     total_remaining_strength = checking_total_remaining_strength(conn)
+
+    #     num_unassigned_units = len(unassigned_units)
+    #     strength_to_allocate_each_unit = total_remaining_strength/num_unassigned_units
+
+    #     # ----------------------------------------------------------
+
+    #     return strength_to_allocate_each_unit, total_remaining_strength
+
+    def get_remaining_strength(conn,fetched_account_id):
+        db_helper = GenericDBHelper(conn)
+
+  
+
+        # Fetching total_strength and reserved_strength from account table
+        account_info = db_helper.select_all(
+            table_name='account',
+            columns='remaining_strength',
+            where_clause=f'account_id = {fetched_account_id}'
+        )
+
+
+        if not account_info:
+            raise Exception(f"Account with ID {fetched_account_id} not found.")
+
+        remaining_strength = account_info[0]
+
+        print ("Getting remaning strength ",remaining_strength[0])
+
+        return remaining_strength[0]
+
+    def analysing_units_to_assign_leads(conn, total_units, battle_date, fetched_account_id):
+        """
+        Simulate assigning unassigned units to leads and filling deployment table.
+        Uses total_strength minus reserved_strength to calculate strength to allocate.
+        """
 
         db_helper = GenericDBHelper(conn)
-        hardcoded_account_id = 1
 
-        if not unassigned_units:
+        if not total_units:
             print("No unassigned units found. Skipping assignment.")
-            return
+            return 0,0
 
-        # fetching account strength from account table
+        # Fetching total_strength and reserved_strength from account table
+        account_info = db_helper.select_all(
+            table_name='account',
+            columns='remaining_strength, reserved_strength',
+            where_clause=f'account_id = {fetched_account_id}'
+        )
 
-        total_remaining_strength = checking_total_remaining_strength(conn)
+        if not account_info:
+            raise Exception(f"Account with ID {fetched_account_id} not found.")
 
-        num_unassigned_units = len(unassigned_units)
-        strength_to_allocate_each_unit = total_remaining_strength/num_unassigned_units
+        remaining_strength, reserved_strength = account_info[0]
 
-        # ----------------------------------------------------------
+        
 
-        return strength_to_allocate_each_unit, total_remaining_strength
+        # Calculate the strength to allocate per unit after reserving strength for withdrawals
+        available_strength_for_allocation = remaining_strength - reserved_strength
+
+
+        print(f"remaining_strength: {remaining_strength}, reserved strength: {reserved_strength}, available strength for allocation: {available_strength_for_allocation} for battle_date: {battle_date}")
+
+
+        if available_strength_for_allocation <= 0:
+            print("No strength available to allocate. Skipping assignment.")
+            return 0,0
+
+        # num_total_units = len(total_units)
+        # strength_to_allocate_each_unit = available_strength_for_allocation / num_total_units
+        # Filter units that match the given account_id
+        matching_units = [unit for unit in total_units if unit[4] == fetched_account_id]
+        num_matching_units = len(matching_units)
+
+        if num_matching_units == 0:
+            raise Exception(f"No units found for account_id {fetched_account_id}")
+        
+        print(f'Total Unassigned units for account {fetched_account_id} : {num_matching_units} and strength avaiable to assign: {available_strength_for_allocation}')
+
+        strength_to_allocate_each_unit = available_strength_for_allocation / num_matching_units
+
+
+
+        return strength_to_allocate_each_unit, remaining_strength
+
+
 
     # def fetch_closing_prices(conn, lead_id, battle_date):
     #     db_helper = GenericDBHelper(conn)
     #     closing_price = db_helper.select_all(
-    #         table_name='leads', columns='closing_price', where_clause='lead_date = %s and leads_id = %s', where_values=(battle_date, lead_id))
+    #         table_name='leads_gold_ml', columns='closing_price', where_clause='lead_date = %s and leads_id = %s', where_values=(battle_date, lead_id))
     #     return closing_price
 
     def fetch_deployment_data(conn, unit_assignment_id):
@@ -1381,26 +1494,33 @@ def war_dag_test():
     def filling_summary_table(conn, battle_date):
         db_helper = GenericDBHelper(conn)
 
-        total_allocated_strength = db_helper.select_all(
-            table_name='allocation', columns='SUM(allocated_strength)')
-        total_allocated_strength = total_allocated_strength[0][0]
-
-        # Fetch daily profit and loss
+        # Fetch cumulative profit and loss (SUM)
         profit_and_losses = db_helper.select_all(
-            table_name='performance', columns='SUM(profit_and_loss)', where_clause='battle_date = %s', where_values=(battle_date,))
+            table_name='performance',
+            columns='SUM(profit_and_loss)',
+            where_clause='battle_date = %s',
+            where_values=(battle_date,)
+        )
         cumulative_pandl = profit_and_losses[0][0]
 
-        print('Total Allocated Strength', total_allocated_strength)
-        cumulative_percentage_profit_and_loss = (
-            cumulative_pandl*100)/total_allocated_strength
+        # Fetch average percentage profit and loss (AVG)
+        avg_percentage_pandl = db_helper.select_all(
+            table_name='performance',
+            columns='AVG(percentageprofitandloss)',
+            where_clause='battle_date = %s',
+            where_values=(battle_date,)
+        )
+        cumulative_percentage_profit_and_loss = avg_percentage_pandl[0][0]
 
-        columns = ['battle_date', 'cumulative_profit_and_loss',
-                   'cumulative_percentageprofitandloss']
+        columns = ['battle_date', 'cumulative_profit_and_loss', 'cumulative_percentageprofitandloss']
 
-        db_helper.insert(table_name='summary', columns=columns,
-                         values_list=[(battle_date, cumulative_pandl, cumulative_percentage_profit_and_loss)])
+        db_helper.insert(
+            table_name='summary',
+            columns=columns,
+            values_list=[(battle_date, cumulative_pandl, cumulative_percentage_profit_and_loss)]
+        )
 
-        print('summary table filled !!!!!<----')
+        print('Summary table filled with cumulative P&L and average percentage P&L for:', battle_date)
 
     def inserting_into_performace(conn, values_list: list):
         db_helper = GenericDBHelper(conn)
@@ -1433,7 +1553,7 @@ def war_dag_test():
             else:
             # Handle the case where the ticker is not found in stocktrader.fortune_100
                 print(f"Stock {stock_name} not found in stocktrader.fortune_100")
-            cursor.close()
+            
 
         return sector_list
 
@@ -1469,9 +1589,10 @@ def war_dag_test():
 
         # Otherwise, check the active_sectors table
         active_sectors = db_helper.select_all(
-            table_name="active_sectors",
+            table_name="active_sectors",  # Table name without schema prefix
+            schema_name="stocktrader",            # Specify the schema name
             columns="sector_name",
-            where_clause="active_from <= %s AND active_to >= %s AND (status = 'yes' OR status = 'Automated')",
+            where_clause="active_from <= %s AND active_to >= %s",
             where_values=(battle_date, battle_date),
         )
 
@@ -1492,17 +1613,409 @@ def war_dag_test():
 
         active_sector_names = {sector[0] for sector in active_sectors}
         filtered_sector_list = [(lead_id, stock_name, sector) for lead_id, stock_name, sector in sector_list if sector in active_sector_names]
-        return filtered_sector_list            
-    
+        return filtered_sector_list           
+
+    def process_pending_deposits(conn, battle_date: datetime):
+        """
+        Checks the `deposit` table for any pending deposits for the given battle_date.
+        If found, updates the account table with the deposit amount and transaction type.
+        Also updates the deposit status to 'completed'.
+        """
+        db_helper = GenericDBHelper(conn)
+
+        # Fetch pending deposits for the given date
+        query = """
+        SELECT deposit_id, account_id, amount 
+        FROM war_iter_5.deposit 
+        WHERE status = 'pending' AND date = %s
+        """
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, (battle_date,))
+            pending_deposits = cursor.fetchall()
+
+            if not pending_deposits:
+                print(f"No pending deposits found for {battle_date}.")
+                return
+
+            for deposit_id, account_id, amount in pending_deposits:
+                print(f"Processing deposit {deposit_id} for account {account_id} with amount {amount}.")
+
+                # Fetch current account info
+                account_info = db_helper.select_all(
+                    table_name='account', 
+                    columns='*', 
+                    where_clause=f'account_id = {account_id}'
+                )
+                if not account_info:
+                    print(f"⚠️ Account {account_id} not found. Skipping this deposit.")
+                    continue
+
+                # Extract account details
+                account_id, active_strength, user_id, total_strength, remaining_strength, reserved_strength = account_info[0]
+
+                # Update account balance (e.g., add deposit amount to total & remaining strength)
+                new_total_strength = (total_strength or 0) + amount
+                new_remaining_strength = (remaining_strength or 0) + amount
+
+                update_account_table(
+                    conn=conn,
+                    account_id=account_id,
+                    columns_to_be_updated=['total_strength', 'remaining_strength'],
+                    new_values=[new_total_strength, new_remaining_strength],
+                    battle_date=battle_date,
+                    transaction_type='Deposit'
+                )
+
+                # Update deposit status to 'completed'
+                update_deposit_status(conn, deposit_id, 'Completed')
+
+            print(" All pending deposits processed.")
+        except Exception as e:
+            print(f" Error processing pending deposits: {e}")
+            conn.rollback()
+            raise
+        
+
+    def update_deposit_status(conn, deposit_id, new_status):
+        """
+        Helper to update deposit status.
+        """
+        db_helper = GenericDBHelper(conn)
+        db_helper.update(
+            table_name='deposit',
+            set_columns=['status'],
+            set_values=[new_status],
+            where_clause=f'deposit_id = {deposit_id}'
+        )
+        print(f"Updated deposit {deposit_id} status to {new_status}.") 
+
+
+    def update_withdrawal_status(conn, withdrawal_id, new_status, completed_at=None):
+        """
+        Updates the status (and optionally the completed_at date) of a withdrawal record.
+        """
+
+        db_helper = GenericDBHelper(conn)
+
+        if new_status == 'completed':
+            # When marking completed, store the actual completion date
+            db_helper.update(
+                table_name='withdrawal',
+                set_columns=['status', 'completed_at'],
+                set_values=[new_status, completed_at],
+                where_clause=f'withdrawal_id = {withdrawal_id}'
+            )
+        else:
+            # For pending/processing/rejected, no need to set completed_at
+            db_helper.update(
+                table_name='withdrawal',
+                set_columns=['status'],
+                set_values=[new_status],
+                where_clause=f'withdrawal_id = {withdrawal_id}'
+            )
+
+        print(f"✅ Updated withdrawal {withdrawal_id} status to {new_status}.")
+
+
+    def process_pending_withdrawals(conn, battle_date: datetime):
+        """
+        Processes all pending withdrawals scheduled for the current battle_date or any past dates.
+        Handles strength reservation, status updates, and eventual completion if enough strength is available.
+        """
+
+        db_helper = GenericDBHelper(conn)
+
+        # Fetch all pending withdrawals where requested_at is today or earlier
+        query = """
+        SELECT withdrawal_id, account_id, amount 
+        FROM war_iter_5.withdrawal 
+        WHERE status = 'pending' AND requested_at <= %s
+        """
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, (battle_date,))
+            pending_withdrawals = cursor.fetchall()
+
+            if not pending_withdrawals:
+                print(f"No pending withdrawals found for {battle_date} or earlier.")
+                return
+
+            for withdrawal_id, account_id, amount in pending_withdrawals:
+                print(f"Processing withdrawal {withdrawal_id} for account {account_id} with amount {amount}")
+
+                # Fetch current account info
+                account_info = db_helper.select_all(
+                    table_name='account',
+                    columns='*',
+                    where_clause=f'account_id = {account_id}'
+                )
+                if not account_info:
+                    print(f"⚠️ Account {account_id} not found. Skipping this withdrawal.")
+                    continue
+
+                # Unpack account details
+                account_id, active_strength, user_id, total_strength, remaining_strength, reserved_strength = account_info[0]
+
+                # Check if withdrawal amount is within total strength
+                if amount > total_strength:
+                    # Reject if amount exceeds total strength
+                    print(f"❌ Withdrawal {withdrawal_id} exceeds total strength. Marking as rejected.")
+                    update_withdrawal_status(conn, withdrawal_id, 'rejected', battle_date)
+                    continue
+                    
+                # Fetch all allocation IDs for this withdrawal
+                allocation_query = """
+                SELECT allocation_id FROM war_iter_5.allocation
+                """
+                cursor.execute(allocation_query)
+                allocations = cursor.fetchall()
+                allocation_ids = [row[0] for row in allocations]
+
+                # Otherwise, mark as processing and reserve the strength
+                new_reserved_strength = reserved_strength + amount
+
+                print(f"Current reserved_strength : {reserved_strength}, new_reserved_strength : {new_reserved_strength}")
+
+                update_account_table(
+                    conn=conn,
+                    account_id=account_id,
+                    columns_to_be_updated=['reserved_strength'],
+                    new_values=[new_reserved_strength],
+                    battle_date=battle_date,
+                    transaction_type='Withdrawal Reserve'
+                )
+
+                update_withdrawal_status(conn, withdrawal_id, 'processing', battle_date, allocation_ids)
+
+            print("✅ All pending withdrawals processed.")
+        except Exception as e:
+            print(f"⚠️ Error processing pending withdrawals: {e}")
+            conn.rollback()
+            raise
+        
+
+    def update_withdrawal_status(conn, withdrawal_id, new_status, completed_at=None, allocation_ids=None):
+        """
+        Updates the status (and optionally the completed_at date) of a withdrawal record.
+        """
+
+        db_helper = GenericDBHelper(conn)
+        set_columns = ['status']
+        set_values = [new_status]
+
+        if completed_at:
+            set_columns.append('completed_at')
+            set_values.append(completed_at)
+        
+        if allocation_ids is not None:
+            set_columns.append('allocation_ids')
+            set_values.append(str(allocation_ids))
+
+        db_helper.update(
+            table_name='withdrawal',
+            set_columns=set_columns,
+            set_values=set_values,
+            where_clause=f'withdrawal_id = {withdrawal_id}'
+        )
+
+        print(f"✅ Updated withdrawal {withdrawal_id} status to {new_status}.")
+
+    def check_and_complete_withdrawals(conn, battle_date: datetime):
+        """
+        Periodic check to see if we can fulfill any 'processing' withdrawals.
+        If the remaining strength can now cover the reserved amount, complete the withdrawal.
+        """
+
+        db_helper = GenericDBHelper(conn)
+
+        # Fetch all withdrawals marked as 'processing'
+        query = """
+        SELECT withdrawal_id, account_id, amount, allocation_ids 
+        FROM war_iter_5.withdrawal 
+        WHERE status = 'processing'
+        """
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            processing_withdrawals = cursor.fetchall()
+
+            for withdrawal_id, account_id, amount, allocation_ids in processing_withdrawals:
+                # Fetch latest account info
+                account_info = db_helper.select_all(
+                    table_name='account',
+                    columns='*',
+                    where_clause=f'account_id = {account_id}'
+                )
+                if not account_info:
+                    print(f"⚠️ Account {account_id} not found. Skipping withdrawal {withdrawal_id}.")
+                    continue
+
+                account_id, active_strength, user_id, total_strength, remaining_strength, reserved_strength = account_info[0]
+
+                # Check if allocations are sold (i.e., no longer in the allocation table)
+                allocation_query = """
+                SELECT allocation_id FROM war_iter_5.allocation
+                """
+                cursor.execute(allocation_query)
+                current_allocations = {row[0] for row in cursor.fetchall()}
+
+                if all(allocation_id not in current_allocations for allocation_id in eval(allocation_ids)):
+                    # Now check if we can complete the withdrawal
+                    if remaining_strength >= amount:
+                        print(f"Completing withdrawal {withdrawal_id}, for amount : {amount}, current remaining_strength : {remaining_strength}, reserved_strength : {reserved_strength}, total_strength : {total_strength} ")
+                        
+                        new_total_strength = total_strength - amount
+                        new_remaining_strength = remaining_strength - amount
+                        new_reserved_strength = reserved_strength - amount
+
+                        update_account_table(
+                            conn=conn,
+                            account_id=account_id,
+                            columns_to_be_updated=['total_strength', 'remaining_strength', 'reserved_strength'],
+                            new_values=[new_total_strength, new_remaining_strength, new_reserved_strength],
+                            battle_date=battle_date,
+                            transaction_type='Withdrawal Complete'
+                        )
+
+                        update_withdrawal_status(conn, withdrawal_id, 'completed', completed_at=battle_date)
+
+                        print(f"✅ Completed withdrawal {withdrawal_id} for account {account_id}.")
+
+            print("✅ All processing withdrawals checked.")
+        except Exception as e:
+            print(f"⚠️ Error checking for completed withdrawals: {e}")
+            conn.rollback()
+            raise
+        
+
+    def liquidate(conn, battle_date):
+        """
+        Fetches all allocations from war_iter_5.allocation and processes them for removal.
+        """
+        query = "SELECT * FROM war_iter_5.allocation"
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                allocations = cur.fetchall()
+                if allocations:
+                    process_allocations_for_removing_them(allocations, 'Liquidate', battle_date)
+                    print("Liquidation process executed.")
+                else:
+                    print("No allocations found to liquidate.")
+        except Exception as e:
+            print(f"Error during liquidation: {e}")            
+
+
+    def check_control_flag(conn, battle_date):
+        global one_to_one_flag  # Ensure we're modifying the global variable
+        global liquitaded_flag
+
+        query = """
+            SELECT flag_status 
+            FROM stocktrader.control_flags_sandpit_ml 
+            WHERE start_date <= %s AND (end_date IS NULL OR end_date >= %s)
+            ORDER BY start_date DESC
+            LIMIT 1;
+        """
+        
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, (battle_date, battle_date))
+                result = cur.fetchone()
+                
+                if result:
+                    flag_status = result[0]
+                    print(f"Flag Status: {flag_status} | Battle Date: {battle_date}")
+
+                    if flag_status == 'Normal':
+                        one_to_one_flag = True
+                        liquitaded_flag = False
+                    elif flag_status == 'Concentrate':
+                        one_to_one_flag = False
+                        liquitaded_flag = False
+                    elif flag_status == 'Rapidly Concentrate':
+                        if liquitaded_flag == False:
+                            liquidate(conn, battle_date)
+                            liquitaded_flag = True
+                        one_to_one_flag = False
+                    elif flag_status == 'Rapidly Normal':
+                        if liquitaded_flag == False:
+                            liquidate(conn, battle_date)
+                            liquitaded_flag = True
+                        one_to_one_flag = True    
+                    else:
+                        print("Invalid flag status:",flag_status, " | using normal condition ")
+                        one_to_one_flag = True    
+                else:
+                    # No matching flag_status found, default to True
+                    print("No matching flag status found. Defaulting one_to_one_flag to True.")
+                    flag_status = "Default (Normal)"
+                    one_to_one_flag = True
+
+                print(f"Updated one_to_one_flag: {one_to_one_flag}")  # Debugging print
+                return flag_status
+        except Exception as e:
+            print(f"Error fetching flag status: {e}")
+            return None
+
+
+    def process_battleday(battle_date, conn):
+        """Calls the stored procedure to process battleday leads and shows RAISE NOTICE output."""
+
+        schema_name = schema_name_global
+        try:
+            # Set isolation level to allow capturing NOTICEs
+            conn.set_isolation_level(extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            conn.notices.clear()  # Clear any previous messages
+
+            cur = conn.cursor()
+
+            # Use SELECT instead of CALL, since it's a FUNCTION
+            cur.execute("SELECT stocktrader.process_battleday_leads_ml(%s, %s)", (schema_name, battle_date))
+
+            print(f"\n✅ Successfully processed battle day: {battle_date}")
+
+            # Show the RAISE NOTICE messages
+            if conn.notices:
+                print("Output from stored procedure:")
+                for notice in conn.notices:
+                    print(notice.strip())
+            else:
+                print("No RAISE NOTICE output found.")
+
+
+        except Exception as e:
+            print(f"❌ Error: {e}")
+
+    def insert_new_unit_assignment(conn, values_list: list,battle_date):
+        """
+        Inserts a new unit assignment record into the unit_assignment table.
+
+        :param conn: Active DB connection object
+        :param values_list: List of tuples, each containing:
+            (unit_assignment_id, corp_id, unit_id, assignment_status, account_id)
+        """
+        db_helper = GenericDBHelper(conn)
+        columns = ['unit_assignment_id', 'corp_id', 'unit_id', 'assignment_status', 'account_id']
+        db_helper.insert(table_name='unit_assignment', columns=columns, values_list=values_list)
+        print("Inserted new unit into unit_assignment table at", battle_date)
+
+
+
+          
     @task()
     def process_dates(conn, dates: dict):
+        
+        #unit_added_flag = False
 
         if not conn:
             print("Failed to connect to the database.")
             return
 
         dates_list = []
-        hardcoded_account_id = 1
         dates_list = dates["dates"]
 
         print("dates_list---------------", dates_list)
@@ -1510,19 +2023,31 @@ def war_dag_test():
 
         # threshold_perc_for_unassigning = 4
         for date in dates_list:
+#            for fetched_account_id in [1, 2]:
+            #print("Running for Account Id",fetched_account_id)
             print("current---------------dates----------", date)
             current_date = date
+            battle_date = current_date.strftime("%Y-%m-%d")
+
+            process_battleday(battle_date= battle_date,conn= conn)
+
+            check_control_flag(conn=conn, battle_date=battle_date)
+
+            print("Processing pending deposits for ", battle_date)
+            process_pending_deposits(conn=conn, battle_date=battle_date)
+
+            print(f"Processing withdrawals for {battle_date}")
+            process_pending_withdrawals(conn, battle_date)
+            check_and_complete_withdrawals(conn, battle_date)
+
             if not isBusinessDay(current_date):
                 print(f"this is not a businessday so skipping")
                 continue
-            battle_date = current_date.strftime("%Y-%m-%d")
+            
             start_date_for_trend = (
                 current_date - timedelta(days=PreviousNumberOfDaysToIncludeForFetchingLeads)).strftime("%Y-%m-%d")
 
-            # this function calls the analyzerstock class to check and sell the stock received from azure API
-            remove_allocation_to_sell_using_StockAnalyzerUsingAzureAPI(
-                dbhelper=db_helper, conn=conn, battle_date=battle_date)
-
+            
             # stop loss
             #check_poor_performers_results = check_performance_remove_allocations_deployments(
             #    conn=conn, threshold_perc_for_unassigning= threshold_perc_for_unassigning_global, battle_date=battle_date)
@@ -1551,58 +2076,75 @@ def war_dag_test():
                     continue
 
                 if not trending_leads :
-                    print(
-                        f'skipping this day because there are no leads')
-                    continue
+                    print('No trending leads  found but not skipping the day.')
+                    #print(
+                    #    f'skipping this day because there are no leads')
+                    #continue
                 
                 print(f'trending list',trending_leads)
 
-       
-                # Get sectors from trending leads
-                sector_list = get_sectors_from_trending_leads(conn, trending_leads)
-                print(f"sector_list = ",sector_list)
+    
+                if trending_leads:
+                    print('Active Sector Filtering Disabled')
+                    # # Get sectors from trending leads
+                    # sector_list = get_sectors_from_trending_leads(conn, trending_leads)
+                    # print(f"sector_list = ", sector_list)
 
-                # Get active sectors for the current battle date
-                active_sectors = get_active_sectors( battle_date)
-                print(f"active_sectors = ", active_sectors)
+                    # # Get active sectors for the current battle date
+                    # active_sectors = get_active_sectors(battle_date)
+                    # print(f"active_sectors = ", active_sectors)
 
-                # Filter sector list to keep only active sectors
-                filtered_sector_list = filter_active_sectors(sector_list, active_sectors)
-                print(f"filtered_sector_list = ", filtered_sector_list)
+                    # # Filter sector list to keep only active sectors
+                    # filtered_sector_list = filter_active_sectors(sector_list, active_sectors)
+                    # print(f"filtered_sector_list = ", filtered_sector_list)
 
-                if len(filtered_sector_list) < 1:
-                    print('No Leads remaining after active sector fitering so skipping assignment for the current battle')
-                    continue
-                # Create a new list containing only the stock names from filtered sectors
-                trending_leads = [(lead_id, stock_name) for lead_id, stock_name, _ in filtered_sector_list]
-                print(f'Active Sector Leads', trending_leads)
+                    # # Create a new list containing only the stock names from filtered sectors
+                    # trending_leads = [(lead_id, stock_name) for lead_id, stock_name, _ in filtered_sector_list]
+                    # print(f'Active Sector Leads', trending_leads)
+                else:
+                    print('No trending leads found. Skipping active sector filtering.')
+                    trending_leads = []
+                leads_data_from_table = []
 
                 if len(trending_leads) > 0:
+                    print("getting tredingleads data from polygon")
                     polygon_data = get_polygon_data(
                         battle_date=current_date, unassigned_units=unassigned_units, leads=trending_leads, origin='trends')
 
                     # filled_leads_data = fill_leads_data_with_polygon(
                     #     conn=conn, list_leads_data=polygon_data)
 
-                strength_to_allocate_each_unit, total_remaining_strength = analysing_units_to_assign_leads(
-                    unassigned_units=unassigned_units, battle_date=battle_date, conn=conn)
 
-                leads_data_from_table = polygon_data["values_list_leads"]
-                print("strength_to_allocate_each_unit---------",
-                      strength_to_allocate_each_unit)
-                print("length of leads_data_from_table",
-                      len(leads_data_from_table))
-                print(leads_data_from_table)
+                    
+                   
+
+                    leads_data_from_table = polygon_data["values_list_leads"]
+                    #print("strength_to_allocate_each_unit---------",
+                    #    strength_to_allocate_each_unit)
+                    print("length of leads_data_from_table",
+                        len(leads_data_from_table))
+                    print(leads_data_from_table)
 
             # if no unassigned units then no need to fetch leads so leads_data_from_table variable is empty
-            if not unassigned_units:
+            if not unassigned_units and len(trending_leads) < 1 :
                 print("No unassigned units found. Skipping fetching leads.")
                 leads_data_from_table = []
 
             num_unassigned_units = len(unassigned_units)
             num_assigned_units = len(total_units) - num_unassigned_units
 
-            
+
+
+            # print(f"num_unassigned_units: {num_unassigned_units}, unit_added_flag: {unit_added_flag}")
+
+            # if num_unassigned_units < 1 and not unit_added_flag:
+            #     new_unit_assignment = [
+            #         (10,3, 4, 'unassigned', 1)
+            #     ]
+            #     insert_new_unit_assignment(conn, new_unit_assignment,battle_date)
+            #     unit_added_flag = True
+
+
 
             if num_assigned_units == 0 and not leads_data_from_table:
                 print(
@@ -1615,16 +2157,30 @@ def war_dag_test():
             # if len(leads_data_from_table)==0 or num_unassigned_units==0:
             #     print("assigning same leads as in previous battle date")
 
-            # Handle scenario where leads are less than unassigned units
+            # Main unit by unit loop
 
             lead_index_to_fetch = 0
             leads_fetched_already = []
+            accounts = set(unit[4] for unit in total_units)
+            
             for unit in total_units:
-                print("we are in the loop")
+                print("we are in the unit by unit loop")
                 print("unit starting is--------", unit)
                 unit_assignment_status = unit[3]
                 print("unit_assignment_status--", unit_assignment_status)
                 unit_assignment_id = unit[0]
+                fetched_account_id = unit[4]
+                print(f'unit assignment id: {unit_assignment_id} | account_id fetched: {fetched_account_id} ')
+
+                remaining_strength = get_remaining_strength(conn,fetched_account_id)
+
+
+                unassigned_units = get_units(conn=conn, fetch='unassigned')
+                    
+
+                strength_to_allocate_each_unit, total_remaining_strength = analysing_units_to_assign_leads(
+                        total_units=unassigned_units, battle_date=battle_date, conn=conn, fetched_account_id = fetched_account_id)
+                print('strength to allocate to each unit: ',strength_to_allocate_each_unit)
 
                 if unit_assignment_status == 'assigned':
 
@@ -1635,7 +2191,7 @@ def war_dag_test():
                         conn=conn, unit_assignment_id=unit_assignment_id)
 
                     print("deployment_data_assigned_unit----",
-                          deployment_data_assigned_unit)
+                        deployment_data_assigned_unit)
                     deployment_id, unit_assignment_id, lead_id, strength, depl_status, start_date_depl, end_date_depl, account_id = deployment_data_assigned_unit[
                         0]
 
@@ -1645,7 +2201,7 @@ def war_dag_test():
                     print("current battle date--- ", battle_date)
 
                     lead_name = db_helper.select_all(
-                        table_name='leads', schema_name='stocktrader', columns='stock_name', where_clause="id = %s", where_values=(lead_id,))[0][0]
+                        table_name='leads_gold_ml', schema_name='stocktrader', columns='stock_name', where_clause="id = %s", where_values=(lead_id,))[0][0]
 
                     print("lead name---", lead_name)
                     print("leads_fetched_already---", leads_fetched_already)
@@ -1656,7 +2212,7 @@ def war_dag_test():
                     if polygon_data['values_list_leads']:
                         leads_fetched_already.append(lead_name)
                         print("leads_fetched_already---",
-                              leads_fetched_already)
+                            leads_fetched_already)
                         # fill the lead data with new date
                         # filled_leads_data = fill_leads_data_with_polygon(
                         #     conn=conn, list_leads_data=polygon_data)
@@ -1667,7 +2223,7 @@ def war_dag_test():
                     #     print(
                     #         f'lead name{lead_name} already in already fetched leads{leads_fetched_already} ')
                     #     fetched_lead = db_helper.select_all(
-                    #         table_name='leads', columns='*', where_clause='stock_name = %s and lead_date = %s', where_values=(lead_name, battle_date))[0]
+                    #         table_name='leads_gold_ml', columns='*', where_clause='stock_name = %s and lead_date = %s', where_values=(lead_name, battle_date))[0]
                     #     leads_id, lead_name, lead_date, new_lead_opening_price, new_lead_closing_price = fetched_lead
 
                     # fetch allocation id based on deployment id
@@ -1680,11 +2236,11 @@ def war_dag_test():
                     prev_allocation_opening_price = allocaion_data[3]
 
                     print("prev_allocation_opening_price",
-                          prev_allocation_opening_price)
+                        prev_allocation_opening_price)
 
                     prev_allocation_closing_price = allocaion_data[4]
                     print("prev_allocation_closing_price",
-                          prev_allocation_closing_price)
+                        prev_allocation_closing_price)
                     prev_stock_quantity = allocaion_data[6]
                     prev_stock_quantity = float(prev_stock_quantity)
                     allocation_strength = allocaion_data[5]
@@ -1693,7 +2249,7 @@ def war_dag_test():
                     if polygon_data["values_list_leads"]:
 
                         # new_lead_id = db_helper.select_all(
-                        #     table_name='leads', columns='leads_id', where_clause="stock_name = %s and lead_date = %s", where_values=(lead_name, lead_date))[0]
+                        #     table_name='leads_gold_ml', columns='leads_id', where_clause="stock_name = %s and lead_date = %s", where_values=(lead_name, lead_date))[0]
 
                         # update_deployment(conn=conn, deployment_id=deployment_id, columns_to_be_updated=[
                         #     'lead_id'], new_values=[new_lead_id])
@@ -1701,11 +2257,11 @@ def war_dag_test():
                         closing_price_for_current_date = float(
                             new_lead_closing_price)
                         print("in condition", "closing_price_for_current_date",
-                              closing_price_for_current_date)
+                            closing_price_for_current_date)
                         opening_price_for_current_date = float(
                             prev_allocation_opening_price)
                         print("in condition opening_price_for_current_date",
-                              opening_price_for_current_date)
+                            opening_price_for_current_date)
 
                     else:
                         # business day and polygon data not available
@@ -1731,33 +2287,55 @@ def war_dag_test():
                     #     allocation_strength)+float(profit_and_loss)
 
                     update_allocation(conn, allocation_id=allocation_id_for_update, columns_to_be_updated=['profit_and_loss', 'opening_price', 'closing_price'],
-                                      new_values=[profit_and_loss, opening_price_for_current_date, closing_price_for_current_date], start_date_for_allocation_history=start_date_depl, end_date_for_allocation_history=end_date_depl, current_battle_date=battle_date)
+                                    new_values=[profit_and_loss, opening_price_for_current_date, closing_price_for_current_date], start_date_for_allocation_history=start_date_depl, end_date_for_allocation_history=end_date_depl, current_battle_date=battle_date)
 
                     performance_values_list = [
                         (unit_assignment_id, battle_date, profit_and_loss, lead_id, battle_date, battle_date, allocation_id_for_update, profit_and_loss_percent)]
                     inserting_into_performace(
                         conn=conn, values_list=performance_values_list)
+                    
+                    
 
-                elif unit_assignment_status == 'unassigned' and leads_data_from_table:
+                elif unit_assignment_status == 'unassigned' and leads_data_from_table and strength_to_allocate_each_unit <= remaining_strength:
                     print('leads_data_from_table', leads_data_from_table)
-                    print("this unit is un assigned")
+                    print("this unit is unassigned")
                     print('lead_index_to_fetch---------', lead_index_to_fetch)
-
-                    current_lead = leads_data_from_table[lead_index_to_fetch]
-                    lead_id = current_lead[0]
-                    print('lead id ------', lead_id)
-
-                    # fetch the lead data
-                    # updating respective deployment data
 
                     strength = math.floor(strength_to_allocate_each_unit)
                     current_date = battle_date
-                    account_id = hardcoded_account_id
+                    account_id = fetched_account_id
 
+                    # Skip leads whose price exceeds available strength
+                    while True:
+                        if not leads_data_from_table:
+                            print("No suitable leads remaining.")
+                            lead_found = False
+                            break  # Exit if no affordable leads left
+
+                        current_lead = leads_data_from_table[lead_index_to_fetch]
+                        lead_id = current_lead[0]
+                        opening_price = current_lead[3]
+
+                        if opening_price <= strength:
+                            print(f"Lead {lead_id} is affordable. Proceeding.")
+                            lead_found = True
+                            break
+                        else:
+                            print(f"Skipping lead {lead_id} — opening price {opening_price} exceeds strength {strength}")
+                            leads_data_from_table.pop(lead_index_to_fetch)
+                            lead_index_to_fetch = 0  # Always start from the beginning of the updated list
+
+                    # If no affordable lead was found, skip this unit
+                    if not lead_found:
+                        continue
+
+                    # Proceed with deployment and allocation
                     value_list = [(unit_assignment_id, lead_id, strength,
-                                   'requested', current_date, current_date, account_id)]
+                                'requested', current_date, current_date, account_id)]
 
                     insert_into_deployment(conn, value_list)
+
+
 
                     try:
                         # updating the status of deployment
@@ -1768,13 +2346,22 @@ def war_dag_test():
                         print(
                             f"Assigned unit {unit_assignment_id} to lead {lead_id}.")
 
-                        # taking one lead from leads and assigning it to unit until units are assigned
-                        #leads_data_from_table.pop(lead_index_to_fetch)
+                        print(f"one_to_one_flag: {one_to_one_flag}, "
+                            f"len(leads_data_from_table): {len(leads_data_from_table)}, "
+                            f"unassigned_units_count: {sum(1 for u in total_units if u[3] == 'unassigned')}")
 
+                        unassigned_units_count = sum(1 for u in total_units if u[3] == 'unassigned')
 
-                        #changing so that the last lead gets assigned to all remaining units if more thah 1 left
-                        if not (len(leads_data_from_table) == 1 and sum(1 for u in total_units if u[3] == 'unassigned') > 1):
+                        if one_to_one_flag:
+                            print("One_to_one_flag is True, so popping lead.")
                             leads_data_from_table.pop(lead_index_to_fetch)
+                        elif (len(leads_data_from_table) > 1 or unassigned_units_count == 1):  
+                            print("Not in one-to-one mode, but conditions allow popping, so popping lead.")
+                            leads_data_from_table.pop(lead_index_to_fetch)
+                        else:
+                            print("Not popping as one_to_one_flag is False and there is exactly 1 lead with more than 1 unassigned unit.")
+
+
 
 
                         # lead_index_to_fetch = (
@@ -1787,7 +2374,7 @@ def war_dag_test():
 
                     # fetching deployment id
                     deployment = fetch_deployment_data(conn=conn,
-                                                       unit_assignment_id=unit_assignment_id)
+                                                    unit_assignment_id=unit_assignment_id)
                     deployment_id = deployment[0][0]
 
                     print(f'Deployment Id fetched {deployment_id}')
@@ -1804,15 +2391,15 @@ def war_dag_test():
                     print("opening_price-----", opening_price)
                     print("closing_price-----", closing_price)
 
-                    stock_quantity = strength/opening_price
+                    stock_quantity = int(strength/opening_price)
                     profit_and_loss = 0
 
                     values_list = [[profit_and_loss, deployment_id, opening_price,
-                                    closing_price, strength, stock_quantity, 'materlized']]
+                                    closing_price, strength, stock_quantity, 'materlized',account_id]]
                     insert_into_allocation(conn, values_list, battle_date)
                     # ---------------------------------------------------------
                     # updating account table
-                    account_id, active_strength, user_id, total_strength, remaining_strength = db_helper.select_all(
+                    account_id, active_strength, user_id, total_strength, remaining_strength, reserved_strength = db_helper.select_all(
                         table_name='account', columns='*', where_clause=f'account_id = {account_id}')[0]
                     print("active_strength before----", active_strength)
                     print("remaining_strength before----", remaining_strength)
@@ -1824,9 +2411,9 @@ def war_dag_test():
                     # total_strength += profit_and_loss
                     account_update_values_list = [
                         active_strength, remaining_strength]
-
+                    transaction_type = "Buy"
                     update_account_table(conn=conn, account_id=account_id, columns_to_be_updated=[
-                        'active_strength', 'remaining_strength'], new_values=account_update_values_list, battle_date=battle_date)
+                        'active_strength', 'remaining_strength'], new_values=account_update_values_list, battle_date=battle_date, transaction_type = transaction_type)
 
                     # inseritng to allocation history
                     # Insterting into allocation automatically adds corresponding allocation history entry
@@ -1836,7 +2423,7 @@ def war_dag_test():
                     # closing_price = fetch_closing_prices(conn=conn,
                     #                                      lead_id=lead_id, battle_date=battle_date)
                     # # calculate profit and loss
-                    # opening_price = db_helper.select_all(table_name='leads',
+                    # opening_price = db_helper.select_all(table_name='leads_gold_ml',
                     #                                      columns='opening_price', where_clause='leads_id = %s', where_values=(lead_id,))
 
                     # opening_price = opening_price[0][0]
@@ -1874,25 +2461,12 @@ def war_dag_test():
                         "we do not have leads and so we are not assigning---")
                     continue
 
-            # # fetching perfirmance details
-            # profit_and_losses = db_helper.select_all(
-            #     table_name='performance', columns='SUM(profit_and_loss)', where_clause='battle_date = %s', where_values=(battle_date,))
-            # profit_and_losses = profit_and_losses[0][0]
-            # print(profit_and_losses)
+            
 
-            # account_id = 1
-            # # updating account table
-            # account_id, active_strength, user_id, total_strength, remaining_strength = db_helper.select_all(
-            #     table_name='account', columns='*', where_clause=f'account_id = {account_id}')[0]
+            #running everyday, but not everyday and per account rn
 
-            # whole_day_processed_active_strength = float(
-            #     active_strength) + float(profit_and_losses)
-
-            # # total_strength += profit_and_loss
-            # account_update_values_list = [whole_day_processed_active_strength]
-            # update_account_table(conn=conn, account_id=account_id, columns_to_be_updated=[
-            #                      'active_strength'], new_values=account_update_values_list,battle_date=battle_date)
-
+            remove_allocation_to_sell_using_StockAnalyzerUsingAzureAPI(
+                dbhelper=db_helper, conn=conn, battle_date=battle_date) ##25-02-2025 (MOVE THIS AFTER  PERFORMANCE METRICS ARE FILLED)
             # the summary table filling
             filling_summary_table(conn=conn, battle_date=battle_date)
 
