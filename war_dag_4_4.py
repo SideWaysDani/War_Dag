@@ -25,9 +25,27 @@ import json
 import time
 from requests.exceptions import RequestException
 
+
+
+# Setting schema and tables to be used
 schema_name_global = "war_iter_4_4"
+leads_table_name_global = "leads_gold_ml"
+control_flags_table_name_global = "control_flags_sandpit_ml"
+process_battleday_leads_table_name_global = "process_battleday_leads_ml"
+
+
+# Setting number of previous days to be included for fetching leads
+PreviousNumberOfDaysToIncludeForFetchingLeads = 5
+
+
+
+
+
+# Flags initialization 
 one_to_one_flag = True
 liquitaded_flag = False
+
+
 
 # config = configparser.ConfigParser()
 # config.read('trade_configuration.ini')
@@ -37,7 +55,6 @@ liquitaded_flag = False
 # threshold_perc_for_setting_limit_global = int(
 #     config['TradeConfig']['set_limit'])
 
-PreviousNumberOfDaysToIncludeForFetchingLeads = 5
 
 # # stop loss
 #threshold_perc_for_unassigning_global = 1
@@ -50,7 +67,7 @@ class PostgresConnection:
         self.host = 'sthub.c3uguk04fjqb.ap-southeast-2.rds.amazonaws.com'
         self.database = 'postgres'
         self.user = 'stpostgres'
-        self.password = 'stocktrader'
+        self.password = 'stocktrader' 
         self.connection = None
 
     def connect(self):
@@ -212,7 +229,7 @@ class StockAnalyzerUsingAzureAPI:
     api_code = "TryM8ecL_3NA8n8CtLwgowLvm08BAHpC3Xp4_QwxtqTKAzFugvz0LQ=="
 
     @staticmethod
-    def load_data_from_api(st_name, start_date="2019-06-01", end_date="2025-01-10"):
+    def load_data_from_api(st_name, start_date="2019-06-01", end_date="2025-12-31"):
         url = "https://stapi02.azurewebsites.net/api/httpstsignals"
         params = {
             "code": StockAnalyzerUsingAzureAPI.api_code,
@@ -406,7 +423,7 @@ default_args = {
 }
 
 
-@dag(dag_id='war_dag_4_4', schedule_interval=None, tags=['war_dag_4_4'], render_template_as_native_obj=True, default_args=default_args)
+@dag(dag_id='war_dag_4', schedule_interval=None, tags=['war_dag_4'], render_template_as_native_obj=True, default_args=default_args)
 def war_dag_test():
     '''New functions added below'''
     ''''-----------------------------'''
@@ -449,8 +466,8 @@ def war_dag_test():
         print(f"Allocation history inserted successfully.")
 
     def get_lead_name_id_from_allocation(db_helper: GenericDBHelper, depl_id):
-        result = db_helper.select_all(columns='leads_gold_ml.stock_name,leads_gold_ml.id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-                            JOIN  stocktrader.leads_gold_ml ON deployment.lead_id = leads_gold_ml.id''', where_clause='allocation.deployment_id = %s', where_values=(depl_id,))
+        result = db_helper.select_all(columns=f'{leads_table_name_global}.stock_name,{leads_table_name_global}.id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+                            JOIN  stocktrader.{leads_table_name_global} ON deployment.lead_id = {leads_table_name_global}.id''', where_clause=f'allocation.deployment_id = %s', where_values=(depl_id,))
 
         leads_name = result[0][0]
         leads_id = result[0][1]
@@ -554,7 +571,7 @@ def war_dag_test():
         unit_assignment_id, lead_id, strength, status, valid_from_date, valid_to_date, account_id = values_list[
             0]
         lead_name = db_helper.select_all(
-            table_name='leads_gold_ml', schema_name='stocktrader', columns='stock_name', where_clause='id = %s', where_values=(lead_id,))
+            table_name=f'{leads_table_name_global}', schema_name='stocktrader', columns='stock_name', where_clause='id = %s', where_values=(lead_id,))
         deployment_id = fetch_deployment_data(
             conn=conn, unit_assignment_id=unit_assignment_id)[0][0]
         values_list = [(lead_id, status,
@@ -984,8 +1001,8 @@ def war_dag_test():
         #     conn.close()
 
     # def get_lead_name_mapping_id_from_allocation(db_helper: GenericDBHelper):
-    #     result = db_helper.select_all(columns='allocation.*,leads_gold_ml.stock_name,leads_gold_ml.leads_id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-    #                           JOIN  {schema_name_global}.leads ON deployment.lead_id = leads_gold_ml.leads_id''')
+    #     result = db_helper.select_all(columns='allocation.*,{leads_table_name_global}.stock_name,{leads_table_name_global}.leads_id', table_name=f'''allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+    #                           JOIN  {schema_name_global}.leads ON deployment.lead_id = {leads_table_name_global}.leads_id''')
     #     if result:
     #         # print("result", result)
     #         # leads_names = [item[-2] for item in result]
@@ -1025,13 +1042,13 @@ def war_dag_test():
             return
 
     def get_lead_name_mapping_id_from_allocation(conn):
-        query = f'''select allocation.*,leads_gold_ml.stock_name,leads_gold_ml.id from {schema_name_global}.allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
-                            JOIN  stocktrader.leads_gold_ml ON deployment.lead_id = leads_gold_ml.id'''
+        query = f'''select allocation.*,{leads_table_name_global}.stock_name,{leads_table_name_global}.id from {schema_name_global}.allocation JOIN  {schema_name_global}.deployment ON allocation.deployment_id = deployment.deployment_id
+                            JOIN  stocktrader.{leads_table_name_global} ON deployment.lead_id = {leads_table_name_global}.id'''
         cur = conn.cursor()
         # Execute a simple SQL query
-        # query = "SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
+        # query =f"SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
 
-        # query = "SELECT * FROM stocktrader.stocks_leads"
+        # query =f"SELECT * FROM stocktrader.stocks_leads"
         cur.execute(query)
 
         # Fetch the result
@@ -1087,12 +1104,12 @@ def war_dag_test():
 
         cur = conn.cursor()
         # Execute a simple SQL query
-        # query = "SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
+        # query =f"SELECT * FROM stocktrader.stocks_leads WHERE start_date = %s"
 
-        # query = "SELECT * FROM stocktrader.stocks_leads WHERE %s BETWEEN stocks_leads_gold_ml.start_date AND stocks_leads_gold_ml.end_date"
-        query = "SELECT id,stock_name FROM stocktrader.leads_gold_ml WHERE leads_gold_ml.lead_date BETWEEN %s AND %s"
+        # query =f"SELECT * FROM stocktrader.stocks_leads WHERE %s BETWEEN stocks_{leads_table_name_global}.start_date AND stocks_{leads_table_name_global}.end_date"
+        query = f"SELECT id,stock_name FROM stocktrader.{leads_table_name_global} WHERE {leads_table_name_global}.lead_date BETWEEN %s AND %s"
 
-        # query = "SELECT * FROM stocktrader.stocks_leads"
+        # query =f"SELECT * FROM stocktrader.stocks_leads"
         cur.execute(query, (start_date, end_date,))
 
         # Fetch the result
@@ -1103,8 +1120,9 @@ def war_dag_test():
 
         db_helper = GenericDBHelper(conn=conn)
         filtered_result = result
-        filtered_result = filter_leads_for1_to_1_correspondance(
-            dbhelper=db_helper, leads=result, conn=conn)
+        if one_to_one_flag:
+            filtered_result = filter_leads_for1_to_1_correspondance(
+                dbhelper=db_helper, leads=result, conn=conn)
 
         print("filtered_result---", filtered_result)
 
@@ -1326,7 +1344,7 @@ def war_dag_test():
     #     db_helper = GenericDBHelper(conn)
 
     #     # Execute the query with the list of tuples
-    #     db_helper.insert(table_name='leads_gold_ml', columns=columns,
+    #     db_helper.insert(table_name='{leads_table_name_global}', columns=columns,
     #                      values_list=list_leads_data)
 
     #     print("values inserted in leads table")
@@ -1432,7 +1450,7 @@ def war_dag_test():
     # def fetch_closing_prices(conn, lead_id, battle_date):
     #     db_helper = GenericDBHelper(conn)
     #     closing_price = db_helper.select_all(
-    #         table_name='leads_gold_ml', columns='closing_price', where_clause='lead_date = %s and leads_id = %s', where_values=(battle_date, lead_id))
+    #         table_name='{leads_table_name_global}', columns='closing_price', where_clause='lead_date = %s and leads_id = %s', where_values=(battle_date, lead_id))
     #     return closing_price
 
     def fetch_deployment_data(conn, unit_assignment_id):
@@ -1545,7 +1563,7 @@ def war_dag_test():
         sector_list = []
         for lead_id, stock_name in trending_leads:
             cursor = conn.cursor()
-            cursor.execute("SELECT sector FROM stocktrader.fortune_1000 WHERE ticker = %s", (stock_name,))
+            cursor.execute(f"SELECT sector FROM stocktrader.fortune_1000 WHERE ticker = %s", (stock_name,))
             sector = cursor.fetchone()
             if sector:
                 sector_list.append((lead_id, stock_name, sector[0]))
@@ -1623,9 +1641,9 @@ def war_dag_test():
         db_helper = GenericDBHelper(conn)
 
         # Fetch pending deposits for the given date
-        query = """
+        query = f"""
         SELECT deposit_id, account_id, amount 
-        FROM war_iter_4_4.deposit 
+        FROM {schema_name_global}.deposit 
         WHERE status = 'pending' AND date = %s
         """
         try:
@@ -1726,9 +1744,9 @@ def war_dag_test():
         db_helper = GenericDBHelper(conn)
 
         # Fetch all pending withdrawals where requested_at is today or earlier
-        query = """
+        query = f"""
         SELECT withdrawal_id, account_id, amount 
-        FROM war_iter_4_4.withdrawal 
+        FROM {schema_name_global}.withdrawal 
         WHERE status = 'pending' AND requested_at <= %s
         """
 
@@ -1765,8 +1783,8 @@ def war_dag_test():
                     continue
                     
                 # Fetch all allocation IDs for this withdrawal
-                allocation_query = """
-                SELECT allocation_id FROM war_iter_4_4.allocation
+                allocation_query = f"""
+                SELECT allocation_id FROM {schema_name_global}.allocation
                 """
                 cursor.execute(allocation_query)
                 allocations = cursor.fetchall()
@@ -1830,9 +1848,9 @@ def war_dag_test():
         db_helper = GenericDBHelper(conn)
 
         # Fetch all withdrawals marked as 'processing'
-        query = """
+        query = f"""
         SELECT withdrawal_id, account_id, amount, allocation_ids 
-        FROM war_iter_4_4.withdrawal 
+        FROM {schema_name_global}.withdrawal 
         WHERE status = 'processing'
         """
 
@@ -1855,8 +1873,8 @@ def war_dag_test():
                 account_id, active_strength, user_id, total_strength, remaining_strength, reserved_strength = account_info[0]
 
                 # Check if allocations are sold (i.e., no longer in the allocation table)
-                allocation_query = """
-                SELECT allocation_id FROM war_iter_4_4.allocation
+                allocation_query = f"""
+                SELECT allocation_id FROM {schema_name_global}.allocation
                 """
                 cursor.execute(allocation_query)
                 current_allocations = {row[0] for row in cursor.fetchall()}
@@ -1892,9 +1910,9 @@ def war_dag_test():
 
     def liquidate(conn, battle_date):
         """
-        Fetches all allocations from war_iter_4_4.allocation and processes them for removal.
+        Fetches all allocations from {schema_name_global}.allocation and processes them for removal.
         """
-        query = "SELECT * FROM war_iter_4_4.allocation"
+        query = f"SELECT * FROM {schema_name_global}.allocation"
         try:
             with conn.cursor() as cur:
                 cur.execute(query)
@@ -1912,9 +1930,9 @@ def war_dag_test():
         global one_to_one_flag  # Ensure we're modifying the global variable
         global liquitaded_flag
 
-        query = """
+        query = f"""
             SELECT flag_status 
-            FROM stocktrader.control_flags_sandpit_ml_ml 
+            FROM stocktrader.{control_flags_table_name_global} 
             WHERE start_date <= %s AND (end_date IS NULL OR end_date >= %s)
             ORDER BY start_date DESC
             LIMIT 1;
@@ -1973,7 +1991,7 @@ def war_dag_test():
             cur = conn.cursor()
 
             # Use SELECT instead of CALL, since it's a FUNCTION
-            cur.execute("SELECT stocktrader.process_battleday_leads_ml(%s, %s)", (schema_name, battle_date))
+            cur.execute(f"SELECT stocktrader.{process_battleday_leads_table_name_global}(%s, %s)", (schema_name, battle_date))
 
             print(f"\n✅ Successfully processed battle day: {battle_date}")
 
@@ -1989,7 +2007,41 @@ def war_dag_test():
         except Exception as e:
             print(f"❌ Error: {e}")
 
+    @task()    
+    def reset_schema(conn):
+   
+        cur = conn.cursor()
+        db_helper = GenericDBHelper(conn)
 
+        print(f"Cleaning up schema: {schema_name_global}...")
+
+
+        # Reset account table
+        account_update_query = f"""
+            UPDATE {schema_name_global}.account
+            SET active_strength = 0,
+                total_strength = 50000 ,
+                remaining_strength = 50000
+        """
+        cur.execute(account_update_query)
+        conn.commit()
+
+        # Update unit assignment
+        cur.execute(f"UPDATE {schema_name_global}.unit_assignment SET assignment_status = 'unassigned'")
+        conn.commit()
+
+        # Tables to clear
+        tables_to_delete_from = [
+            "allocation", "deployment", "deployment_history",
+            "performance", "allocation_history", "account_history", "summary"
+        ]
+
+        # Delete data from multiple tables
+        for table in tables_to_delete_from:
+            cur.execute(f"DELETE FROM {schema_name_global}.{table}")
+            conn.commit()
+
+        print(f"Cleanup completed for schema: {schema_name_global}")
 
 
           
@@ -1999,7 +2051,7 @@ def war_dag_test():
         if not conn:
             print("Failed to connect to the database.")
             return
-
+        
         dates_list = []
         dates_list = dates["dates"]
 
@@ -2176,7 +2228,7 @@ def war_dag_test():
                     print("current battle date--- ", battle_date)
 
                     lead_name = db_helper.select_all(
-                        table_name='leads_gold_ml', schema_name='stocktrader', columns='stock_name', where_clause="id = %s", where_values=(lead_id,))[0][0]
+                        table_name=f'{leads_table_name_global}', schema_name='stocktrader', columns='stock_name', where_clause="id = %s", where_values=(lead_id,))[0][0]
 
                     print("lead name---", lead_name)
                     print("leads_fetched_already---", leads_fetched_already)
@@ -2198,7 +2250,7 @@ def war_dag_test():
                     #     print(
                     #         f'lead name{lead_name} already in already fetched leads{leads_fetched_already} ')
                     #     fetched_lead = db_helper.select_all(
-                    #         table_name='leads_gold_ml', columns='*', where_clause='stock_name = %s and lead_date = %s', where_values=(lead_name, battle_date))[0]
+                    #         table_name='{leads_table_name_global}', columns='*', where_clause='stock_name = %s and lead_date = %s', where_values=(lead_name, battle_date))[0]
                     #     leads_id, lead_name, lead_date, new_lead_opening_price, new_lead_closing_price = fetched_lead
 
                     # fetch allocation id based on deployment id
@@ -2224,7 +2276,7 @@ def war_dag_test():
                     if polygon_data["values_list_leads"]:
 
                         # new_lead_id = db_helper.select_all(
-                        #     table_name='leads_gold_ml', columns='leads_id', where_clause="stock_name = %s and lead_date = %s", where_values=(lead_name, lead_date))[0]
+                        #     table_name='{leads_table_name_global}', columns='leads_id', where_clause="stock_name = %s and lead_date = %s", where_values=(lead_name, lead_date))[0]
 
                         # update_deployment(conn=conn, deployment_id=deployment_id, columns_to_be_updated=[
                         #     'lead_id'], new_values=[new_lead_id])
@@ -2398,7 +2450,7 @@ def war_dag_test():
                     # closing_price = fetch_closing_prices(conn=conn,
                     #                                      lead_id=lead_id, battle_date=battle_date)
                     # # calculate profit and loss
-                    # opening_price = db_helper.select_all(table_name='leads_gold_ml',
+                    # opening_price = db_helper.select_all(table_name='{leads_table_name_global}',
                     #                                      columns='opening_price', where_clause='leads_id = %s', where_values=(lead_id,))
 
                     # opening_price = opening_price[0][0]
@@ -2484,6 +2536,7 @@ def war_dag_test():
     # print("dates", parameters["start_date"],
     #       parameters["end_date"])
     dates = access_params()
+    reset= reset_schema(conn=conn)
     process_dates_task = process_dates(conn=conn, dates=dates)
 
 
