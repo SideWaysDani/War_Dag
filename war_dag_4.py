@@ -2523,6 +2523,51 @@ def war_dag_test():
         # Return the parameters
         return dates_dic
 
+    @task()
+    def log_simulation_results(conn, year: int):
+        print('Logging Simulation Results....')
+        cur = conn.cursor()
+
+        # Get profit data from account_history
+        cur.execute(f"""
+            SELECT total_strength
+            FROM {schema_name_global}.account_history
+            ORDER BY battle_date ASC;
+        """)
+        strengths = cur.fetchall()
+        if not strengths or len(strengths) < 2:
+            print("Not enough data in account_history to compute profit.")
+            return
+
+        total_invested = strengths[0][0]
+        total_returned = strengths[-1][0]
+        profit_percentage = round(((total_returned - total_invested) / total_invested) * 100, 2)
+        
+        print('total_invested: ',total_invested, ' total_returned: ',total_returned, ' profit_percentage: ',profit_percentage)
+
+        # Count number of trades
+        cur.execute(f"""
+            SELECT COUNT(*) FROM {schema_name_global}.allocation_history
+            WHERE status = 'api_signal sell';
+        """)
+        number_of_trades = cur.fetchone()[0]
+
+        print('Number of trades: ', number_of_trades)
+
+        # Insert into stocktrader.simulation_results
+        cur.execute(f"""
+            INSERT INTO stocktrader.simulation_results (
+                year, profit_percentage, total_invested,
+                total_returned, number_of_trades
+            )
+            VALUES (%s, %s, %s, %s, %s);
+        """, (year, profit_percentage, total_invested, total_returned, number_of_trades))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+
     # DAG workflow
     connection = PostgresConnection()
     conn = connection.connect()
@@ -2535,9 +2580,16 @@ def war_dag_test():
 
     # print("dates", parameters["start_date"],
     #       parameters["end_date"])
+
+        # Define tasks
     dates = access_params()
-    reset= reset_schema(conn=conn)
+    reset = reset_schema(conn=conn)
     process_dates_task = process_dates(conn=conn, dates=dates)
+    log_simulation_task = log_simulation_results(conn=conn, year=2024)
+
+    # Set task dependencies
+    dates >> reset >> process_dates_task >> log_simulation_task
+
 
 
 War_Dag = war_dag_test()
